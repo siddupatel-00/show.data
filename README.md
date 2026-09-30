@@ -160,6 +160,28 @@ per user + site and refreshed automatically; the chosen property
 | `POST /api/stripe/webhook` | Stripe events |
 | `POST /api/webhooks/:provider` | Polar / Lemon Squeezy / Razorpay / Dodo |
 
+## Performance
+
+Dashboard reads were the slow part of this app — every stat is its own query,
+and a round trip to Turso costs real time. Three things keep it fast:
+
+- **Run the functions in the same region as the database.** `vercel.json` pins
+  serverless functions to `bom1` (Mumbai) because the Turso database lives in
+  `aws-ap-south-1`. Leaving the default (`iad1`) put every query on a
+  trans-oceanic round trip: ~190 ms per query instead of ~4 ms. If you use a
+  different Turso region, change `regions` in `vercel.json` to match.
+- **Batch same-tick queries.** `src/lib/db.ts` collects statements issued in
+  the same tick (the `Promise.all` calls in stats and pages) and sends them as
+  one `batch()` request. A failing batch is replayed one statement at a time so
+  a single bad statement only rejects its own promise.
+- **Cache the dashboard payload briefly.** The stats route keeps results in
+  memory for 15 s (2 s for realtime) keyed by site + range, so a hard refresh
+  or tab switch does not re-query anything.
+
+Query and handler time is reported in a `server-timing` header on API routes
+(`app;dur=…, db;dur=…;stmts=…;flushes=…`), so `curl -D` splits network time
+from server time.
+
 ## Security
 
 - **Passwords** — scrypt (`N=32768, r=8, p=1`, ~32 MiB per guess) with a

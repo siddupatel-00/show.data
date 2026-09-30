@@ -260,15 +260,25 @@ async function init(): Promise<void> {
 }
 
 let bootMs = 0;
+/** Monotonic — never reset. Per-request numbers are deltas from a start snapshot. */
 const counters = { stmts: 0, flushes: 0, dbMs: 0 };
 
-/** Per-request diagnostics: resets on read, surfaced via `server-timing`. */
-export function dbTiming() {
-  const c = { ...counters, bootMs };
-  counters.stmts = 0;
-  counters.flushes = 0;
-  counters.dbMs = 0;
-  return c;
+export type DbSnapshot = typeof counters & { bootMs: number };
+
+/**
+ * Copy of the counters (with no argument), or the delta since a snapshot.
+ * Counters are global, so under concurrent requests a delta may include
+ * another request's statements — batch flushes are microtask-deferred, so in
+ * practice a statement lands inside the window of the request that issued it.
+ */
+export function dbTiming(since?: DbSnapshot): DbSnapshot {
+  if (!since) return { ...counters, bootMs };
+  return {
+    stmts: counters.stmts - since.stmts,
+    flushes: counters.flushes - since.flushes,
+    dbMs: counters.dbMs - since.dbMs,
+    bootMs,
+  };
 }
 
 function boot(): Promise<void> {

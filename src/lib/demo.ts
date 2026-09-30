@@ -310,7 +310,12 @@ export async function seedDemo(site: Website, days = 60) {
   return { events: rows.length, days };
 }
 
+/**
+ * Removes seeded demo traffic only. Real pageviews and the site's configured
+ * goals are left alone — "clear demo data" must never destroy live tracking.
+ */
 export async function clearDemo(siteId: string) {
-  await run("DELETE FROM events WHERE website_id = ?", [siteId]);
-  await run("DELETE FROM goals WHERE website_id = ?", [siteId]);
+  await run("DELETE FROM events WHERE website_id = ? AND visitor_id GLOB 'demo_*'", [
+    siteId,
+  ]);
 }

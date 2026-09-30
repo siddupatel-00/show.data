@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, process.env.SIDFAST_DB || "sidfast.db");
@@ -36,6 +37,12 @@ CREATE TABLE IF NOT EXISTS password_resets (
   user_id TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  window_start INTEGER NOT NULL,
+  count INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS websites (
@@ -149,6 +156,41 @@ export function isRemote(): boolean {
   return !!process.env.TURSO_DATABASE_URL;
 }
 
+/**
+ * Legacy rows stored session / reset tokens in the clear. Hash them once at
+ * boot so a leaked database can no longer be replayed as live credentials.
+ * Runs inside init() with the raw driver — the shared helpers would re-enter
+ * boot() and deadlock.
+ */
+async function hardenAuthTokens(): Promise<void> {
+  const sha = (v: string) => createHash("sha256").update(v).digest("hex");
+  for (const table of ["sessions", "password_resets"]) {
+    let rows: { token: string }[] = [];
+    if (libsql) {
+      const res = await libsql.execute(
+        `SELECT token FROM ${table} WHERE token NOT LIKE 'sha256:%'`,
+      );
+      rows = res.rows as unknown as { token: string }[];
+    } else if (sqlite) {
+      rows = sqlite
+        .prepare(`SELECT token FROM ${table} WHERE token NOT LIKE 'sha256:%'`)
+        .all() as { token: string }[];
+    }
+    for (const row of rows) {
+      const hashed = `sha256:${sha(row.token)}`;
+      if (libsql)
+        await libsql.execute({
+          sql: `UPDATE ${table} SET token = ? WHERE token = ?`,
+          args: [hashed, row.token],
+        });
+      else
+        sqlite!
+          .prepare(`UPDATE ${table} SET token = ? WHERE token = ?`)
+          .run(hashed, row.token);
+    }
+  }
+}
+
 async function init(): Promise<void> {
   if (isRemote()) {
     const { createClient } = await import("@libsql/client");
@@ -164,6 +206,7 @@ async function init(): Promise<void> {
         /* column already exists */
       }
     }
+    await hardenAuthTokens();
     return;
   }
 
@@ -180,6 +223,7 @@ async function init(): Promise<void> {
       /* column already exists */
     }
   }
+  await hardenAuthTokens();
 }
 
 function boot(): Promise<void> {

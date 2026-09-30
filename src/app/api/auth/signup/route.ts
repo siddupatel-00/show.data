@@ -3,12 +3,16 @@ import { get } from "@/lib/db";
 import { hashPassword, createSession, setSessionCookie } from "@/lib/auth";
 import { run } from "@/lib/db";
 import { id } from "@/lib/ids";
+import { enforce } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(req: NextRequest) {
+  const blocked = await enforce(req, "signup:ip", 10, 60 * 60_000);
+  if (blocked) return blocked;
+
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "Invalid body" }, { status: 400 });
 

@@ -160,6 +160,26 @@ per user + site and refreshed automatically; the chosen property
 | `POST /api/stripe/webhook` | Stripe events |
 | `POST /api/webhooks/:provider` | Polar / Lemon Squeezy / Razorpay / Dodo |
 
+## Security
+
+- **Passwords** — scrypt (`N=32768, r=8, p=1`, ~32 MiB per guess) with a
+  per-password salt and a constant-time compare; parameters are stored with the
+  hash so they can be raised later. Login runs a dummy verification for unknown
+  addresses so response timing cannot be used to enumerate accounts.
+- **Session & reset tokens** — 32 random bytes; only `sha256:<digest>` is
+  stored, so a leaked database yields no replayable credentials. Existing
+  plaintext rows are re-hashed automatically at boot.
+- **OAuth tokens** (Google) — AES-256-GCM with a key derived from `APP_SECRET`.
+- **Rate limiting** — database-backed fixed windows on login / signup /
+  forgot / reset, per IP and per email, answered with `429` + `Retry-After`.
+- **Headers** — CSP, `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, `Permissions-Policy`, COOP/CORP, plus HSTS in production.
+- **Cookies** — `httpOnly`, `SameSite=Lax`, `Secure` whenever the origin is
+  https.
+- **Webhooks** — every provider signature is verified before a row is written.
+- **Repo hygiene** — `.env`, `.env.*`, `data/`, `*.db` and key files are
+  gitignored; only `.env.example` (a template) is committed.
+
 ## Stack
 
 Next.js 16 (App Router) · TypeScript · Tailwind v4 · better-sqlite3 (or Turso

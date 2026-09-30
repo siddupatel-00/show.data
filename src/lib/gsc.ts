@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { get, run } from "./db";
+import { decryptToken, encryptToken } from "./secrets";
 
 const WMA = "https://www.googleapis.com/webmasters/v3";
 const OAUTH = "https://oauth2.googleapis.com/token";
@@ -130,8 +131,8 @@ export async function saveIntegration(
       `ig_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
       userId,
       siteId,
-      tokens.access_token,
-      tokens.refresh_token || "",
+      encryptToken(tokens.access_token),
+      tokens.refresh_token ? encryptToken(tokens.refresh_token) : "",
       Date.now() + (tokens.expires_in || 3600) * 1000,
       JSON.stringify(meta),
       Date.now(),
@@ -143,10 +144,16 @@ export async function getIntegration(
   userId: string,
   siteId: string,
 ): Promise<Integration | undefined> {
-  return get<Integration>(
+  const row = await get<Integration>(
     "SELECT * FROM integrations WHERE user_id = ? AND provider = 'google' AND website_id = ?",
     [userId, siteId],
   );
+  if (!row) return undefined;
+  return {
+    ...row,
+    access_token: decryptToken(row.access_token),
+    refresh_token: decryptToken(row.refresh_token),
+  };
 }
 
 /** Returns a live access token, refreshing and persisting when expired. */
@@ -162,7 +169,7 @@ export async function accessToken(integration: Integration): Promise<string> {
   await run(
     "UPDATE integrations SET access_token = ?, expires_at = ? WHERE id = ?",
     [
-      tokens.access_token,
+      encryptToken(tokens.access_token),
       Date.now() + (tokens.expires_in || 3600) * 1000,
       integration.id,
     ],

@@ -5,10 +5,15 @@ import {
   setSessionCookie,
 } from "@/lib/auth";
 import { get, run } from "@/lib/db";
+import { hashStored } from "@/lib/secrets";
+import { enforce } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  const blocked = await enforce(req, "reset:ip", 30, 60 * 60_000);
+  if (blocked) return blocked;
+
   const body = await req.json().catch(() => null);
   const tok = String(body?.token || "");
   const password = String(body?.password || "");
@@ -22,7 +27,7 @@ export async function POST(req: NextRequest) {
 
   const row = await get<{ user_id: string }>(
     "SELECT user_id FROM password_resets WHERE token = ? AND expires_at > ?",
-    [tok, Date.now()],
+    [hashStored(tok), Date.now()],
   );
   if (!row)
     return NextResponse.json(

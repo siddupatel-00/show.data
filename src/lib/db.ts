@@ -264,6 +264,66 @@ function boot(): Promise<void> {
   return ready;
 }
 
+/**
+ * Remote queries are issued over HTTP, and each round trip costs a TLS
+ * handshake plus Turso latency — that dwarfs the query itself. Statements that
+ * are kicked off in the same tick (the `Promise.all` calls in stats/pages) are
+ * therefore collected and sent as a single `batch()` instead of N requests.
+ * A failing batch is replayed one statement at a time so a single bad
+ * statement only rejects its own promise.
+ */
+type Pending = {
+  stmt: import("@libsql/client").InStatement;
+  resolve: (v: import("@libsql/client").ResultSet) => void;
+  reject: (e: unknown) => void;
+};
+
+let queue: Pending[] = [];
+let scheduled = false;
+
+function enqueue(
+  stmt: import("@libsql/client").InStatement,
+): Promise<import("@libsql/client").ResultSet> {
+  const promise = new Promise<import("@libsql/client").ResultSet>(
+    (resolve, reject) => queue.push({ stmt, resolve, reject }),
+  );
+  if (!scheduled) {
+    scheduled = true;
+    queueMicrotask(flush);
+  }
+  return promise;
+}
+
+async function flush(): Promise<void> {
+  const batch = queue;
+  queue = [];
+  scheduled = false;
+  if (!batch.length) return;
+  await boot();
+  if (libsql) {
+    try {
+      const results = await libsql.batch(
+        batch.map((p) => p.stmt),
+        "deferred",
+      );
+      for (let i = 0; i < results.length; i++) batch[i].resolve(results[i]);
+      return;
+    } catch {
+      for (const p of batch) {
+        try {
+          p.resolve(await libsql.execute(p.stmt));
+        } catch (e) {
+          p.reject(e);
+        }
+      }
+      return;
+    }
+  }
+  for (const p of batch) {
+    p.reject(new Error("db: queued statements without a remote client"));
+  }
+}
+
 function unwrapRows(result: { rows: unknown[] }): unknown[] {
   return result.rows as unknown[];
 }
@@ -274,7 +334,7 @@ export async function all<T = Record<string, unknown>>(
 ): Promise<T[]> {
   await boot();
   if (libsql) {
-    const res = await libsql.execute(
+    const res = await enqueue(
       args === undefined ? { sql } : { sql, args: args as never },
     );
     return unwrapRows(res) as T[];
@@ -289,7 +349,7 @@ export async function get<T = Record<string, unknown>>(
 ): Promise<T | undefined> {
   await boot();
   if (libsql) {
-    const res = await libsql.execute(
+    const res = await enqueue(
       args === undefined ? { sql } : { sql, args: args as never },
     );
     const rows = unwrapRows(res);
@@ -304,9 +364,7 @@ export async function get<T = Record<string, unknown>>(
 export async function run(sql: string, args?: Args): Promise<void> {
   await boot();
   if (libsql) {
-    await libsql.execute(
-      args === undefined ? { sql } : { sql, args: args as never },
-    );
+    await enqueue(args === undefined ? { sql } : { sql, args: args as never });
     return;
   }
   const stmt = sqlite!.prepare(sql);

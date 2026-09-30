@@ -259,8 +259,25 @@ async function init(): Promise<void> {
   await hardenAuthTokens();
 }
 
+let bootMs = 0;
+const counters = { stmts: 0, flushes: 0, dbMs: 0 };
+
+/** Per-request diagnostics: resets on read, surfaced via `server-timing`. */
+export function dbTiming() {
+  const c = { ...counters, bootMs };
+  counters.stmts = 0;
+  counters.flushes = 0;
+  counters.dbMs = 0;
+  return c;
+}
+
 function boot(): Promise<void> {
-  if (!ready) ready = init();
+  if (!ready) {
+    const t0 = Date.now();
+    ready = init().then(() => {
+      bootMs = Date.now() - t0;
+    });
+  }
   return ready;
 }
 
@@ -300,22 +317,33 @@ async function flush(): Promise<void> {
   scheduled = false;
   if (!batch.length) return;
   await boot();
+  counters.stmts += batch.length;
+  counters.flushes += 1;
+  const t0 = Date.now();
   if (libsql) {
     try {
       const results = await libsql.batch(
         batch.map((p) => p.stmt),
         "deferred",
       );
+      counters.dbMs += Date.now() - t0;
       for (let i = 0; i < results.length; i++) batch[i].resolve(results[i]);
       return;
     } catch {
+      counters.stmts -= batch.length;
+      counters.flushes -= 1;
       for (const p of batch) {
         try {
+          const t = Date.now();
           p.resolve(await libsql.execute(p.stmt));
+          counters.dbMs += Date.now() - t;
+          counters.stmts += 1;
+          counters.flushes += 1;
         } catch (e) {
           p.reject(e);
         }
       }
+      counters.dbMs += Date.now() - t0;
       return;
     }
   }

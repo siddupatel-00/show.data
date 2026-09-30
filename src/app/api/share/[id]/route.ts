@@ -32,7 +32,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     pages: await stats.breakdown(site.id, range, "path", 15),
     referrers: await stats.breakdown(site.id, range, "referrer_source", 15),
     countries: await stats.breakdown(site.id, range, "country", 12),
-    devices: stats.deviceBreakdown(site.id, range),
+    devices: await stats.deviceBreakdown(site.id, range),
     sources: await stats.breakdown(site.id, range, "utm_source", 12),
   });
 }

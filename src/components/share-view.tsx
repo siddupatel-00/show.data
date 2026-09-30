@@ -28,6 +28,36 @@ const PRESETS = [
   { key: "90", label: "90 days", days: 90 },
 ];
 
+const LIST_KEYS = [
+  "series",
+  "pages",
+  "referrers",
+  "countries",
+  "devices",
+  "sources",
+] as const;
+
+/** A malformed payload must degrade to empty panels, never white-screen. */
+function normalize(raw: unknown): Data | null {
+  if (!raw || typeof raw !== "object") return null;
+  const d = raw as Partial<Data>;
+  for (const key of LIST_KEYS) {
+    if (!Array.isArray(d[key])) (d as Record<string, unknown>)[key] = [];
+  }
+  if (!d.overview || typeof d.overview !== "object") {
+    d.overview = {
+      pageviews: 0,
+      visitors: 0,
+      revenue: 0,
+      conversionRate: 0,
+      bounceRate: 0,
+    };
+  }
+  if (!d.range || typeof d.range !== "object") d.range = { from: 0, to: 0 };
+  if (!d.site || typeof d.site !== "object") d.site = { name: "", domain: "" };
+  return d as Data;
+}
+
 export function ShareView({
   shareId,
   domain,
@@ -46,7 +76,7 @@ export function ShareView({
     const from = to - days * 86400_000;
     fetch(`/api/share/${shareId}?from=${from}&to=${to}`)
       .then((r) => r.json())
-      .then(setData)
+      .then((raw) => setData(normalize(raw)))
       .catch(() => {});
   }, [shareId, days]);
 

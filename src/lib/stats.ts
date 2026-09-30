@@ -68,31 +68,33 @@ function keys(g: Granularity): { sql: string; group: string } {
 export async function overview(siteId: string, range: Range): Promise<Overview> {
   const base = { website: siteId, from: range.from, to: range.to };
 
-  const pv = await get<{ c: number; v: number; s: number }>(
-    `SELECT COUNT(*) c, COUNT(DISTINCT visitor_id) v, COUNT(DISTINCT session_id) s
-     FROM events WHERE website_id=@website AND type='pageview'
-     AND created_at>=@from AND created_at<@to`,
-    base,
-  );
-  const bounced = await get<{ c: number }>(
-    `SELECT COUNT(*) c FROM (
-       SELECT session_id FROM events WHERE website_id=@website AND type='pageview'
-       AND created_at>=@from AND created_at<@to
-       GROUP BY session_id HAVING COUNT(*)=1)`,
-    base,
-  );
-  const rev = await get<{ revenue: number; payments: number }>(
-    `SELECT COALESCE(SUM(amount),0) revenue, COUNT(*) payments
-     FROM events WHERE website_id=@website AND type='payment'
-     AND created_at>=@from AND created_at<@to`,
-    base,
-  );
-  const goalVisitors = await get<{ c: number }>(
-    `SELECT COUNT(DISTINCT visitor_id) c FROM events
-     WHERE website_id=@website AND type IN ('goal','payment')
-     AND created_at>=@from AND created_at<@to`,
-    base,
-  );
+  const [pv, bounced, rev, goalVisitors] = await Promise.all([
+    get<{ c: number; v: number; s: number }>(
+      `SELECT COUNT(*) c, COUNT(DISTINCT visitor_id) v, COUNT(DISTINCT session_id) s
+       FROM events WHERE website_id=@website AND type='pageview'
+       AND created_at>=@from AND created_at<@to`,
+      base,
+    ),
+    get<{ c: number }>(
+      `SELECT COUNT(*) c FROM (
+         SELECT session_id FROM events WHERE website_id=@website AND type='pageview'
+         AND created_at>=@from AND created_at<@to
+         GROUP BY session_id HAVING COUNT(*)=1)`,
+      base,
+    ),
+    get<{ revenue: number; payments: number }>(
+      `SELECT COALESCE(SUM(amount),0) revenue, COUNT(*) payments
+       FROM events WHERE website_id=@website AND type='payment'
+       AND created_at>=@from AND created_at<@to`,
+      base,
+    ),
+    get<{ c: number }>(
+      `SELECT COUNT(DISTINCT visitor_id) c FROM events
+       WHERE website_id=@website AND type IN ('goal','payment')
+       AND created_at>=@from AND created_at<@to`,
+      base,
+    ),
+  ]);
 
   const pageviews = pv?.c ?? 0;
   const visitors = pv?.v ?? 0;
@@ -123,19 +125,20 @@ export async function series(
   const g = granularityFor(range);
   const { sql, group } = keys(g);
 
-  const pv = await all<{ k: string; pageviews: number; visitors: number }>(
-    `SELECT ${sql} k, COUNT(*) pageviews, COUNT(DISTINCT visitor_id) visitors
-     FROM events WHERE website_id=? AND type='pageview'
-     AND created_at>=? AND created_at<? GROUP BY ${group}`,
-    [siteId, range.from, range.to],
-  );
-
-  const rev = await all<{ k: string; revenue: number }>(
-    `SELECT ${sql} k, COALESCE(SUM(amount),0) revenue
-     FROM events WHERE website_id=? AND type='payment'
-     AND created_at>=? AND created_at<? GROUP BY ${group}`,
-    [siteId, range.from, range.to],
-  );
+  const [pv, rev] = await Promise.all([
+    all<{ k: string; pageviews: number; visitors: number }>(
+      `SELECT ${sql} k, COUNT(*) pageviews, COUNT(DISTINCT visitor_id) visitors
+       FROM events WHERE website_id=? AND type='pageview'
+       AND created_at>=? AND created_at<? GROUP BY ${group}`,
+      [siteId, range.from, range.to],
+    ),
+    all<{ k: string; revenue: number }>(
+      `SELECT ${sql} k, COALESCE(SUM(amount),0) revenue
+       FROM events WHERE website_id=? AND type='payment'
+       AND created_at>=? AND created_at<? GROUP BY ${group}`,
+      [siteId, range.from, range.to],
+    ),
+  ]);
 
   const map = new Map<string, SeriesPoint>();
   const start = bucketStart(range.from, g);
@@ -193,25 +196,26 @@ export async function breakdown(
       : column;
   const whereNonEmpty = passthrough ? "" : ` AND ${column} <> ''`;
 
-  const rows = await all<StatRow>(
-    `SELECT ${expr} label,
-            COUNT(*) pageviews,
-            COUNT(DISTINCT visitor_id) visitors
-     FROM events
-     WHERE website_id=? AND type='pageview'
-       AND created_at>=? AND created_at<?${whereNonEmpty}
-     GROUP BY label ORDER BY pageviews DESC LIMIT ?`,
-    [siteId, range.from, range.to, limit],
-  );
-
-  const pay = await all<{ label: string; revenue: number }>(
-    `SELECT ${expr} label, COALESCE(SUM(amount),0) revenue
-     FROM events
-     WHERE website_id=? AND type='payment'
-       AND created_at>=? AND created_at<?${whereNonEmpty}
-     GROUP BY label`,
-    [siteId, range.from, range.to],
-  );
+  const [rows, pay] = await Promise.all([
+    all<StatRow>(
+      `SELECT ${expr} label,
+              COUNT(*) pageviews,
+              COUNT(DISTINCT visitor_id) visitors
+       FROM events
+       WHERE website_id=? AND type='pageview'
+         AND created_at>=? AND created_at<?${whereNonEmpty}
+       GROUP BY label ORDER BY pageviews DESC LIMIT ?`,
+      [siteId, range.from, range.to, limit],
+    ),
+    all<{ label: string; revenue: number }>(
+      `SELECT ${expr} label, COALESCE(SUM(amount),0) revenue
+       FROM events
+       WHERE website_id=? AND type='payment'
+         AND created_at>=? AND created_at<?${whereNonEmpty}
+       GROUP BY label`,
+      [siteId, range.from, range.to],
+    ),
+  ]);
 
   const revMap = new Map(pay.map((p) => [p.label, p.revenue]));
   return rows.map((r) => ({ ...r, revenue: revMap.get(r.label) ?? 0 }));
@@ -250,26 +254,27 @@ export async function exitPages(siteId: string, range: Range, limit = 10) {
 }
 
 export async function goalsStats(siteId: string, range: Range) {
-  const visitorsRow = await get<{ c: number }>(
-    `SELECT COUNT(DISTINCT visitor_id) c FROM events
-     WHERE website_id=? AND type='pageview' AND created_at>=? AND created_at<?`,
-    [siteId, range.from, range.to],
-  );
+  const [visitorsRow, rows] = await Promise.all([
+    get<{ c: number }>(
+      `SELECT COUNT(DISTINCT visitor_id) c FROM events
+       WHERE website_id=? AND type='pageview' AND created_at>=? AND created_at<?`,
+      [siteId, range.from, range.to],
+    ),
+    all<{
+      label: string;
+      conversions: number;
+      visitors: number;
+      revenue: number;
+    }>(
+      `SELECT goal_name label, COUNT(*) conversions, COUNT(DISTINCT visitor_id) visitors,
+              COALESCE(SUM(amount),0) revenue
+       FROM events WHERE website_id=? AND type IN ('goal','payment')
+         AND created_at>=? AND created_at<? AND goal_name <> ''
+       GROUP BY goal_name ORDER BY conversions DESC`,
+      [siteId, range.from, range.to],
+    ),
+  ]);
   const visitors = visitorsRow?.c ?? 0;
-
-  const rows = await all<{
-    label: string;
-    conversions: number;
-    visitors: number;
-    revenue: number;
-  }>(
-    `SELECT goal_name label, COUNT(*) conversions, COUNT(DISTINCT visitor_id) visitors,
-            COALESCE(SUM(amount),0) revenue
-     FROM events WHERE website_id=? AND type IN ('goal','payment')
-       AND created_at>=? AND created_at<? AND goal_name <> ''
-     GROUP BY goal_name ORDER BY conversions DESC`,
-    [siteId, range.from, range.to],
-  );
 
   return {
     totalVisitors: visitors,
@@ -313,31 +318,32 @@ export async function revenueBySource(
   const source = by === "first" ? "first_source" : "last_source";
   const referrer = by === "first" ? "first_referrer" : "last_referrer";
 
-  const bySource = await all<{
-    label: string;
-    revenue: number;
-    payments: number;
-    visitors: number;
-  }>(
-    `SELECT CASE WHEN ${source}='' THEN 'Direct' ELSE ${source} END label,
-            COALESCE(SUM(amount),0) revenue, COUNT(*) payments,
-            COUNT(DISTINCT visitor_id) visitors
-     FROM events WHERE website_id=? AND type='payment'
-       AND created_at>=? AND created_at<? GROUP BY label ORDER BY revenue DESC LIMIT 15`,
-    [siteId, range.from, range.to],
-  );
-
-  const byReferrer = await all<{
-    label: string;
-    revenue: number;
-    payments: number;
-  }>(
-    `SELECT CASE WHEN ${referrer}='' THEN 'Direct' ELSE ${referrer} END label,
-            COALESCE(SUM(amount),0) revenue, COUNT(*) payments
-     FROM events WHERE website_id=? AND type='payment'
-       AND created_at>=? AND created_at<? GROUP BY label ORDER BY revenue DESC LIMIT 15`,
-    [siteId, range.from, range.to],
-  );
+  const [bySource, byReferrer] = await Promise.all([
+    all<{
+      label: string;
+      revenue: number;
+      payments: number;
+      visitors: number;
+    }>(
+      `SELECT CASE WHEN ${source}='' THEN 'Direct' ELSE ${source} END label,
+              COALESCE(SUM(amount),0) revenue, COUNT(*) payments,
+              COUNT(DISTINCT visitor_id) visitors
+       FROM events WHERE website_id=? AND type='payment'
+         AND created_at>=? AND created_at<? GROUP BY label ORDER BY revenue DESC LIMIT 15`,
+      [siteId, range.from, range.to],
+    ),
+    all<{
+      label: string;
+      revenue: number;
+      payments: number;
+    }>(
+      `SELECT CASE WHEN ${referrer}='' THEN 'Direct' ELSE ${referrer} END label,
+              COALESCE(SUM(amount),0) revenue, COUNT(*) payments
+       FROM events WHERE website_id=? AND type='payment'
+         AND created_at>=? AND created_at<? GROUP BY label ORDER BY revenue DESC LIMIT 15`,
+      [siteId, range.from, range.to],
+    ),
+  ]);
 
   return { bySource, byReferrer };
 }
@@ -345,42 +351,41 @@ export async function revenueBySource(
 export async function realtime(siteId: string, minutes = 5) {
   const since = Date.now() - minutes * 60_000;
 
-  const totals = await get<{ pageviews: number; visitors: number }>(
-    `SELECT COUNT(*) pageviews, COUNT(DISTINCT visitor_id) visitors FROM events
-     WHERE website_id=? AND type='pageview' AND created_at>=?`,
-    [siteId, since],
-  );
-
-  const pages = await all<{ label: string; pageviews: number; last_seen: number }>(
-    `SELECT path label, COUNT(*) pageviews, MAX(created_at) last_seen FROM events
-     WHERE website_id=? AND type='pageview' AND created_at>=?
-     GROUP BY path ORDER BY last_seen DESC LIMIT 10`,
-    [siteId, since],
-  );
-
-  const sources = await all<{ label: string; pageviews: number; last_seen: number }>(
-    `SELECT CASE WHEN referrer_source='' THEN 'Direct' ELSE referrer_source END label,
-            COUNT(*) pageviews, MAX(created_at) last_seen
-     FROM events WHERE website_id=? AND type='pageview' AND created_at>=?
-     GROUP BY label ORDER BY last_seen DESC LIMIT 8`,
-    [siteId, since],
-  );
-
-  const recent = await all<{
-    type: string;
-    path: string;
-    referrer_source: string;
-    country: string;
-    device: string;
-    browser: string;
-    amount: number;
-    created_at: number;
-  }>(
-    `SELECT type, path, referrer_source, country, device, browser, amount, created_at
-     FROM events WHERE website_id=? AND created_at>=?
-     ORDER BY created_at DESC LIMIT 25`,
-    [siteId, since],
-  );
+  const [totals, pages, sources, recent] = await Promise.all([
+    get<{ pageviews: number; visitors: number }>(
+      `SELECT COUNT(*) pageviews, COUNT(DISTINCT visitor_id) visitors FROM events
+       WHERE website_id=? AND type='pageview' AND created_at>=?`,
+      [siteId, since],
+    ),
+    all<{ label: string; pageviews: number; last_seen: number }>(
+      `SELECT path label, COUNT(*) pageviews, MAX(created_at) last_seen FROM events
+       WHERE website_id=? AND type='pageview' AND created_at>=?
+       GROUP BY path ORDER BY last_seen DESC LIMIT 10`,
+      [siteId, since],
+    ),
+    all<{ label: string; pageviews: number; last_seen: number }>(
+      `SELECT CASE WHEN referrer_source='' THEN 'Direct' ELSE referrer_source END label,
+              COUNT(*) pageviews, MAX(created_at) last_seen
+       FROM events WHERE website_id=? AND type='pageview' AND created_at>=?
+       GROUP BY label ORDER BY last_seen DESC LIMIT 8`,
+      [siteId, since],
+    ),
+    all<{
+      type: string;
+      path: string;
+      referrer_source: string;
+      country: string;
+      device: string;
+      browser: string;
+      amount: number;
+      created_at: number;
+    }>(
+      `SELECT type, path, referrer_source, country, device, browser, amount, created_at
+       FROM events WHERE website_id=? AND created_at>=?
+       ORDER BY created_at DESC LIMIT 25`,
+      [siteId, since],
+    ),
+  ]);
 
   return {
     pageviews: totals?.pageviews ?? 0,

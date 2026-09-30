@@ -3,6 +3,7 @@ import { requireSite, isResponse } from "@/lib/guard";
 import { parseRange, clampRetention } from "@/lib/range";
 import * as stats from "@/lib/stats";
 import { all } from "@/lib/db";
+import { withTiming, startedAt } from "@/lib/timing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,9 +31,10 @@ function store(key: string, data: unknown) {
 }
 
 export async function GET(req: NextRequest, ctx: Ctx) {
+  const t0 = startedAt();
   const { id } = await ctx.params;
   const c = await requireSite(id, "viewer");
-  if (isResponse(c)) return c;
+  if (isResponse(c)) return withTiming(c, t0);
 
   const range = clampRetention(parseRange(req), c.user.plan);
   const view = req.nextUrl.searchParams.get("view") || "overview";
@@ -40,10 +42,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (view === "realtime") {
     const key = `rt|${id}`;
     const hit = cached(key, REALTIME_TTL);
-    if (hit) return NextResponse.json(hit);
+    if (hit) return withTiming(NextResponse.json(hit), t0);
     const data = await stats.realtime(id);
     store(key, data);
-    return NextResponse.json(data);
+    return withTiming(NextResponse.json(data), t0);
   }
 
   const snapped = {
@@ -53,12 +55,18 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const key = `s|${id}|${snapped.from}|${snapped.to}`;
   const hit = cached(key, TTL);
   if (hit) {
-    return NextResponse.json(hit, { headers: { "x-sidfast-cache": "hit" } });
+    return withTiming(
+      NextResponse.json(hit, { headers: { "x-sidfast-cache": "hit" } }),
+      t0,
+    );
   }
 
   const payload = await buildPayload(id, snapped);
   store(key, payload);
-  return NextResponse.json(payload, { headers: { "x-sidfast-cache": "miss" } });
+  return withTiming(
+    NextResponse.json(payload, { headers: { "x-sidfast-cache": "miss" } }),
+    t0,
+  );
 }
 
 async function buildPayload(id: string, range: stats.Range) {

@@ -14,19 +14,21 @@ export default async function SitePage({ params }: Params) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const site = await getSite(siteId);
+  const [site, goals, funnels, members] = await Promise.all([
+    getSite(siteId),
+    all<SiteInfo["goals"][number]>(
+      "SELECT * FROM goals WHERE website_id = ? ORDER BY created_at DESC",
+      [siteId],
+    ),
+    all<SiteInfo["funnels"][number]>(
+      "SELECT * FROM funnels WHERE website_id = ? ORDER BY created_at DESC",
+      [siteId],
+    ),
+    membersOf(siteId),
+  ]);
   if (!site) notFound();
   const role = await roleFor(site, user.id);
   if (!role) redirect("/dashboard");
-
-  const goals = await all<SiteInfo["goals"][number]>(
-    "SELECT * FROM goals WHERE website_id = ? ORDER BY created_at DESC",
-    [siteId],
-  );
-  const funnels = await all<SiteInfo["funnels"][number]>(
-    "SELECT * FROM funnels WHERE website_id = ? ORDER BY created_at DESC",
-    [siteId],
-  );
 
   const h = await headers();
   const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";
@@ -43,7 +45,7 @@ export default async function SitePage({ params }: Params) {
     origin,
     goals,
     funnels,
-    members: await membersOf(siteId),
+    members,
     plan: user.plan,
   };
 

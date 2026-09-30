@@ -17,9 +17,11 @@ export async function requireSite(
   siteId: string,
   min: Role = "viewer",
 ): Promise<SiteContext | NextResponse> {
-  const user = await requireUser();
+  const userP = requireUser();
+  const siteP = getSite(siteId);
+  const user = await userP;
   if (user instanceof NextResponse) return user;
-  const site = await getSite(siteId);
+  const site = await siteP;
   if (!site) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const role = await roleFor(site, user.id);
   if (!role || ORDER[role] < ORDER[min])

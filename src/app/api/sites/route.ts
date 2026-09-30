@@ -2,14 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser, isResponse } from "@/lib/guard";
 import { createSite, listSitesForUser, normalizeDomain } from "@/lib/sites";
 import { checkCanAddSite } from "@/lib/plans";
+import { withTiming, startedAt } from "@/lib/timing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const t0 = startedAt();
   const user = await requireUser();
-  if (isResponse(user)) return user;
-  return NextResponse.json({ sites: await listSitesForUser(user.id) });
+  if (isResponse(user)) return withTiming(user, t0);
+  return withTiming(
+    NextResponse.json({ sites: await listSitesForUser(user.id) }),
+    t0,
+  );
 }
 
 export async function POST(req: NextRequest) {

@@ -191,6 +191,47 @@ async function hardenAuthTokens(): Promise<void> {
   }
 }
 
+/**
+ * One round trip decides whether the remote database is already migrated.
+ * Skipping DDL, failed ALTERs and the token sweep saves ~400ms on every cold
+ * start of a serverless instance.
+ */
+const SCHEMA_PROBE = `SELECT
+  (SELECT COUNT(*) FROM pragma_table_info('users')
+     WHERE name IN ('plan','stripe_customer_id')) AS cols,
+  (SELECT COUNT(*) FROM pragma_table_info('rate_limits')) AS rl,
+  (SELECT COUNT(*) FROM sessions WHERE token NOT LIKE 'sha256:%') AS s,
+  (SELECT COUNT(*) FROM password_resets WHERE token NOT LIKE 'sha256:%') AS p`;
+
+async function ensureRemoteSchema(): Promise<void> {
+  try {
+    const res = await libsql!.execute(SCHEMA_PROBE);
+    const row = res.rows[0] as unknown as {
+      cols: number;
+      rl: number;
+      s: number;
+      p: number;
+    };
+    const current = Number(row.cols) === 2 && Number(row.rl) > 0;
+    const legacyTokens = Number(row.s) + Number(row.p) > 0;
+    if (current) {
+      if (legacyTokens) await hardenAuthTokens();
+      return;
+    }
+  } catch {
+    /* tables missing or probe unsupported — fall through to full schema */
+  }
+  await libsql!.executeMultiple(SCHEMA);
+  for (const m of MIGRATIONS) {
+    try {
+      await libsql!.execute(m);
+    } catch {
+      /* column already exists */
+    }
+  }
+  await hardenAuthTokens();
+}
+
 async function init(): Promise<void> {
   if (isRemote()) {
     const { createClient } = await import("@libsql/client");
@@ -198,15 +239,7 @@ async function init(): Promise<void> {
       url: process.env.TURSO_DATABASE_URL!,
       authToken: process.env.TURSO_AUTH_TOKEN,
     });
-    await libsql.executeMultiple(SCHEMA);
-    for (const m of MIGRATIONS) {
-      try {
-        await libsql.execute(m);
-      } catch {
-        /* column already exists */
-      }
-    }
-    await hardenAuthTokens();
+    await ensureRemoteSchema();
     return;
   }
 

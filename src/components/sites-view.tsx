@@ -123,7 +123,7 @@ export function AddSiteModal({
   const [domain, setDomain] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [demo, setDemo] = useState(true);
+  const [demo, setDemo] = useState(false);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();

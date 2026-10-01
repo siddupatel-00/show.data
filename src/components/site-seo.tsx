@@ -41,7 +41,16 @@ export function SiteSeo({
       const res = await fetch(
         `/api/sites/${siteId}/seo?from=${range.from}&to=${range.to}`,
       );
-      setData(await res.json());
+      if (res.ok) {
+        setData(await res.json());
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setData({
+          configured: true,
+          connected: false,
+          error: d.error || "Request failed",
+        });
+      }
     } catch {
       setData({ configured: true, connected: false, error: "Network error" });
     } finally {

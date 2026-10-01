@@ -21,8 +21,9 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000, create an account, then **Add website** (the
-"seed with sample data" checkbox fills the dashboard so you can see it working).
+Open http://localhost:3000, create an account, then **Add website**. Sites start
+empty — tick "seed with sample data" if you want ~60 days of fake traffic to
+explore the dashboard with (Settings has a button to clear it again).
 
 ```bash
 npm run build && npm start   # production
@@ -56,7 +57,8 @@ The snippet is shown on each site's **Settings** tab. It:
 - records pageviews, including SPA route changes (`pushState` / `popstate`)
 - sends referrer, UTM params, screen size; browser/OS/device/country are
   derived server-side from the request
-- ignores bots
+- ignores bots (by user agent) and automation (`navigator.webdriver`), so
+  headless crawls and test runners never count as visitors
 - ships via `navigator.sendBeacon` (no CORS preflight) with a `fetch` fallback
 
 ## Goals

@@ -2,13 +2,12 @@
   "name": "sidfast",
   "version": "0.1.0",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
   },
-  "private": "true",
-  "typecheck": "tsc --noEmit",
+  "private": true,
   "dependencies": {
     "@libsql/client": "^0.18.0",
     "better-sqlite3": "^13.0.3",

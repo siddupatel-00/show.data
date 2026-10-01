@@ -33,6 +33,14 @@
   var VISITOR_TTL = 365 * 24 * 60 * 60 * 1000;
   var SESSION_TTL = 30 * 60 * 1000;
 
+  // Headless/CDP-driven browsers expose navigator.webdriver — those visits are
+  // automation, not people. Keep the API surface intact so pages that call
+  // sidfast(...) don't throw; only the beacon is dropped.
+  var automated = false;
+  try {
+    automated = !!(win.navigator && win.navigator.webdriver);
+  } catch (e) {}
+
   function storage(kind, key, value) {
     try {
       var s = kind === "l" ? localStorage : sessionStorage;
@@ -81,6 +89,10 @@
   }
 
   function send(payload, done) {
+    if (automated) {
+      if (done) done();
+      return;
+    }
     payload.site = siteKey;
     payload.visitor_id = visitorId;
     payload.session_id = sessionId;

@@ -79,6 +79,12 @@ export function AreaChart({
       ? (v: number) => "$" + (v >= 1000 ? (v / 1000).toFixed(1) + "k" : String(v))
       : (v: number) => String(v);
 
+  // An empty/zero series must read 0, not the 1 forced by the scale floor, and
+  // a mid tick that rounds onto its neighbour is dropped instead of repeating.
+  const allZero = values.every((v) => !v);
+  const tick = (f: number) => (allZero ? 0 : Math.round(max * (1 - f)));
+  const midDup = tick(0.5) === tick(0) || tick(0.5) === tick(1);
+
   return (
     <div ref={ref} className="relative w-full">
       {width > 0 && (
@@ -98,7 +104,7 @@ export function AreaChart({
 
           {[0, 0.5, 1].map((f) => {
             const yy = pad.t + innerH * f;
-            const val = Math.round(max * (1 - f));
+            const val = tick(f);
             return (
               <g key={f}>
                 <line
@@ -117,7 +123,7 @@ export function AreaChart({
                   fill="var(--muted)"
                   className="tnum"
                 >
-                  {fmt(val)}
+                  {f === 0.5 && midDup ? "" : fmt(val)}
                 </text>
               </g>
             );
